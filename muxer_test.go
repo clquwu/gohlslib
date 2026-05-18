@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,63 @@ func doRequest(m *Muxer, pathAndQuery string) ([]byte, http.Header, error) {
 	}
 
 	return w.Bytes(), w.h, nil
+}
+
+func TestMuxerFMP4MultiVideoH264MasterPlaylist(t *testing.T) {
+	testVideoTrack2 := &Track{
+		Codec: &codecs.H264{
+			SPS: testSPS,
+			PPS: []byte{0x08},
+		},
+		ClockRate: 90000,
+	}
+
+	m := &Muxer{
+		Variant:            MuxerVariantFMP4,
+		SegmentCount:       3,
+		SegmentMinDuration: 1 * time.Second,
+		Tracks:             []*Track{testVideoTrack, testVideoTrack2, testAudioTrack},
+	}
+
+	err := m.Start()
+	require.NoError(t, err)
+	defer m.Close()
+
+	for _, d := range []time.Duration{2 * time.Second, 6 * time.Second, 7 * time.Second} {
+		aus := [][]byte{{5}}
+		if d == 2*time.Second {
+			aus = [][]byte{testSPS, {8}, {5}}
+		}
+
+		err = m.WriteH264(testVideoTrack, testTime.Add(d-1*time.Second),
+			int64(d)*int64(testVideoTrack.ClockRate)/int64(time.Second), aus)
+		require.NoError(t, err)
+
+		err = m.WriteH264(testVideoTrack2, testTime.Add(d-1*time.Second),
+			int64(d)*int64(testVideoTrack2.ClockRate)/int64(time.Second), aus)
+		require.NoError(t, err)
+	}
+
+	for _, d := range []time.Duration{3 * time.Second, 3500 * time.Millisecond, 4500 * time.Millisecond} {
+		err = m.WriteMPEG4Audio(testAudioTrack, testTime.Add(d-1*time.Second),
+			int64(d)*int64(testAudioTrack.ClockRate)/int64(time.Second),
+			[][]byte{{
+				0x01, 0x02, 0x03, 0x04,
+			}})
+		require.NoError(t, err)
+	}
+
+	byts, _, err := doRequest(m, "/index.m3u8?key=value")
+	require.NoError(t, err)
+
+	body := string(byts)
+	require.Contains(t, body, "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\","+
+		"NAME=\"audio3\",AUTOSELECT=YES,DEFAULT=YES,URI=\"audio3_stream.m3u8?key=value\"")
+	require.Equal(t, 2, strings.Count(body, "#EXT-X-STREAM-INF:"))
+	require.Contains(t, body, "CODECS=\"avc1.42c028,mp4a.40.2\",RESOLUTION=1920x1080,"+
+		"FRAME-RATE=30.000,AUDIO=\"audio\"\nvideo1_stream.m3u8?key=value")
+	require.Contains(t, body, "CODECS=\"avc1.42c028,mp4a.40.2\",RESOLUTION=1920x1080,"+
+		"FRAME-RATE=30.000,AUDIO=\"audio\"\nvideo2_stream.m3u8?key=value")
 }
 
 func TestMuxer(t *testing.T) {

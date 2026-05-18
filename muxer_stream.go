@@ -168,74 +168,41 @@ func (s *muxerStream) close() {
 func (s *muxerStream) populateMultivariantPlaylist(
 	pl *playlist.Multivariant,
 	rawQuery string,
+	audioCodecs []string,
 ) error {
-	mv := pl.Variants[0]
-
-	for _, track := range s.tracks {
-		codec := codecparams.Marshal(track.Codec)
-		if codec != "" && !slices.Contains(mv.Codecs, codec) {
-			mv.Codecs = append(mv.Codecs, codec)
-		}
-
-		switch codec := track.Codec.(type) {
-		case *codecs.AV1:
-			var sh av1.SequenceHeader
-			err := sh.Unmarshal(codec.SequenceHeader)
-			if err != nil {
-				return err
-			}
-
-			mv.Resolution = strconv.FormatInt(int64(sh.Width()), 10) + "x" + strconv.FormatInt(int64(sh.Height()), 10)
-
-			// TODO: FPS
-
-		case *codecs.VP9:
-			mv.Resolution = strconv.FormatInt(int64(codec.Width), 10) + "x" + strconv.FormatInt(int64(codec.Height), 10)
-
-			// TODO: FPS
-
-		case *codecs.H265:
-			var sps h265.SPS
-			err := sps.Unmarshal(codec.SPS)
-			if err != nil {
-				return err
-			}
-
-			mv.Resolution = strconv.FormatInt(int64(sps.Width()), 10) + "x" + strconv.FormatInt(int64(sps.Height()), 10)
-
-			f := sps.FPS()
-			if f != 0 {
-				mv.FrameRate = &f
-			}
-
-		case *codecs.H264:
-			var sps h264.SPS
-			err := sps.Unmarshal(codec.SPS)
-			if err != nil {
-				return err
-			}
-
-			mv.Resolution = strconv.FormatInt(int64(sps.Width()), 10) + "x" + strconv.FormatInt(int64(sps.Height()), 10)
-
-			f := sps.FPS()
-			if f != 0 {
-				mv.FrameRate = &f
-			}
-		}
-	}
-
 	uri := mediaPlaylistPath(s.id)
 	if rawQuery != "" {
 		uri += "?" + rawQuery
 	}
 
-	if s.isLeading {
-		mv.URI = uri
+	if s.isLeading || s.hasVideoTrack() {
+		maxBandwidth, averageBandwidth := bandwidth(s.segments)
+		mv := &playlist.MultivariantVariant{
+			Bandwidth:        maxBandwidth,
+			AverageBandwidth: &averageBandwidth,
+			URI:              uri,
+		}
+
+		for _, track := range s.tracks {
+			err := addTrackToMultivariantVariant(mv, track)
+			if err != nil {
+				return err
+			}
+		}
+
+		if (s.hasVideoTrack() || s.isRendition) && len(audioCodecs) != 0 {
+			for _, codec := range audioCodecs {
+				if codec != "" && !slices.Contains(mv.Codecs, codec) {
+					mv.Codecs = append(mv.Codecs, codec)
+				}
+			}
+			mv.Audio = "audio"
+		}
+
+		pl.Variants = append(pl.Variants, mv)
 	}
 
 	if s.isRendition {
-		mv.Audio = "audio"
-
 		r := &playlist.MultivariantRendition{
 			Type:       playlist.MultivariantRenditionTypeAudio,
 			GroupID:    "audio",
@@ -255,6 +222,73 @@ func (s *muxerStream) populateMultivariantPlaylist(
 		}
 
 		pl.Renditions = append(pl.Renditions, r)
+	}
+
+	return nil
+}
+
+func (s *muxerStream) hasVideoTrack() bool {
+	for _, track := range s.tracks {
+		if track.Codec.IsVideo() {
+			return true
+		}
+	}
+	return false
+}
+
+func addTrackToMultivariantVariant(
+	mv *playlist.MultivariantVariant,
+	track *muxerTrack,
+) error {
+	codec := codecparams.Marshal(track.Codec)
+	if codec != "" && !slices.Contains(mv.Codecs, codec) {
+		mv.Codecs = append(mv.Codecs, codec)
+	}
+
+	switch codec := track.Codec.(type) {
+	case *codecs.AV1:
+		var sh av1.SequenceHeader
+		err := sh.Unmarshal(codec.SequenceHeader)
+		if err != nil {
+			return err
+		}
+
+		mv.Resolution = strconv.FormatInt(int64(sh.Width()), 10) + "x" + strconv.FormatInt(int64(sh.Height()), 10)
+
+		// TODO: FPS
+
+	case *codecs.VP9:
+		mv.Resolution = strconv.FormatInt(int64(codec.Width), 10) + "x" + strconv.FormatInt(int64(codec.Height), 10)
+
+		// TODO: FPS
+
+	case *codecs.H265:
+		var sps h265.SPS
+		err := sps.Unmarshal(codec.SPS)
+		if err != nil {
+			return err
+		}
+
+		mv.Resolution = strconv.FormatInt(int64(sps.Width()), 10) + "x" + strconv.FormatInt(int64(sps.Height()), 10)
+
+		f := sps.FPS()
+		if f != 0 {
+			mv.FrameRate = &f
+		}
+
+	case *codecs.H264:
+		var sps h264.SPS
+		err := sps.Unmarshal(codec.SPS)
+		if err != nil {
+			return err
+		}
+
+		mv.Resolution = strconv.FormatInt(int64(sps.Width()), 10) + "x" + strconv.FormatInt(int64(sps.Height()), 10)
+
+		f := sps.FPS()
+		if f != 0 {
+			mv.FrameRate = &f
+		}
 	}
 
 	return nil

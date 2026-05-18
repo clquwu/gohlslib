@@ -2,7 +2,7 @@ package gohlslib
 
 import (
 	"net/http"
-	"path/filepath"
+	"path"
 	"sync"
 )
 
@@ -34,7 +34,7 @@ func (s *muxerServer) getPathHandler(path string) http.HandlerFunc {
 }
 
 func (s *muxerServer) handle(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Base(r.URL.Path)
+	path := path.Base(r.URL.Path)
 
 	s.mutex.RLock()
 	handler, ok := s.pathHandlers[path]

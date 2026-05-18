@@ -10,10 +10,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bluenviron/gohlslib/v2/pkg/codecparams"
 	"github.com/bluenviron/gohlslib/v2/pkg/codecs"
 	"github.com/bluenviron/gohlslib/v2/pkg/playlist"
 	"github.com/bluenviron/gohlslib/v2/pkg/storage"
@@ -271,9 +273,6 @@ func (m *Muxer) Start() error {
 	} else {
 		for _, track := range m.Tracks {
 			if track.Codec.IsVideo() {
-				if hasVideo {
-					return fmt.Errorf("only one video track is currently supported")
-				}
 				hasVideo = true
 			} else if _, ok := track.Codec.(*codecs.KLV); ok {
 				return fmt.Errorf("KLV tracks are only supported with the MPEG-TS muxer variant")
@@ -400,7 +399,7 @@ func (m *Muxer) Start() error {
 				id = "audio" + strconv.FormatInt(int64(i+1), 10)
 			}
 
-			isRendition := !track.isLeading || (!track.Codec.IsVideo() && len(m.Tracks) > 1)
+			isRendition := !track.Codec.IsVideo() && (!track.isLeading || len(m.Tracks) > 1)
 			isDefault := false
 			name := ""
 
@@ -712,9 +711,6 @@ func (m *Muxer) handleMultivariantPlaylist(w http.ResponseWriter, r *http.Reques
 }
 
 func (m *Muxer) generateMultivariantPlaylist(rawQuery string) ([]byte, error) {
-	// TODO: consider segments in all streams
-	maxBandwidth, averageBandwidth := bandwidth(m.streams[0].segments)
-
 	pl := &playlist.Multivariant{
 		Version: func() int {
 			if m.Variant == MuxerVariantMPEGTS {
@@ -723,14 +719,22 @@ func (m *Muxer) generateMultivariantPlaylist(rawQuery string) ([]byte, error) {
 			return 9
 		}(),
 		IndependentSegments: true,
-		Variants: []*playlist.MultivariantVariant{{
-			Bandwidth:        maxBandwidth,
-			AverageBandwidth: &averageBandwidth,
-		}},
+	}
+
+	var audioCodecs []string
+	for _, stream := range m.streams {
+		if stream.isRendition {
+			for _, track := range stream.tracks {
+				codec := codecparams.Marshal(track.Codec)
+				if codec != "" && !slices.Contains(audioCodecs, codec) {
+					audioCodecs = append(audioCodecs, codec)
+				}
+			}
+		}
 	}
 
 	for _, stream := range m.streams {
-		err := stream.populateMultivariantPlaylist(pl, rawQuery)
+		err := stream.populateMultivariantPlaylist(pl, rawQuery, audioCodecs)
 		if err != nil {
 			return nil, err
 		}

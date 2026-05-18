@@ -273,7 +273,7 @@ func (m *Muxer) Start() error {
 	} else {
 		for _, track := range m.Tracks {
 			if track.Codec.IsVideo() {
-				hasVideo = true
+				continue
 			} else if _, ok := track.Codec.(*codecs.KLV); ok {
 				return fmt.Errorf("KLV tracks are only supported with the MPEG-TS muxer variant")
 			} else {
